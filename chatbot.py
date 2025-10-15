@@ -15,7 +15,6 @@ APPOINTMENTS_FILE_PATH = Path(".") / "appointments.jsonl"
 console = Console()
 AGENT_TAG = "[bold green]Agent[/bold green]"
 USER_TAG = "[bold blue]You[/bold blue]"
-appointments = []
 
 
 @dataclass(frozen=True)
@@ -109,27 +108,23 @@ def load_appointments(appointments_file_path: Path = APPOINTMENTS_FILE_PATH) -> 
     """
     if not appointments_file_path.exists():
         return []
-    try:
-        with appointments_file_path.open("r", encoding="utf-8") as f:
-            appointments = []
-            for line in f:
-                data = json.loads(line)
-                appointments.append(Appointment(
-                    appointment_id=UUID(data["appointment_id"]),
-                    technician_id=data["technician_id"],
-                    start=datetime.fromisoformat(data["start"]),
-                    end=datetime.fromisoformat(data["end"]),
-                    trade=data["trade"]
-                ))
-            return appointments
-    except Exception:
-        # If unreadable/corrupt, start fresh in-memory
-        return []
+
+    with appointments_file_path.open("r", encoding="utf-8") as f:
+        appointments = []
+        for line in f:
+            data = json.loads(line)
+            appointments.append(Appointment(
+                appointment_id=uuid.UUID(data["appointment_id"]),
+                technician_id=data["technician_id"],
+                start=datetime.fromisoformat(data["start"]),
+                end=datetime.fromisoformat(data["end"]),
+                trade=data["trade"]
+            ))
+        return appointments
 
 
 def save_appointments(appointments: List[Appointment], appointments_file_path: Path = APPOINTMENTS_FILE_PATH) -> None:
     """Persist appointments mapping to disk."""
-    print('saving', appointments)
     with appointments_file_path.open("w", encoding="utf-8") as f:
         for appt in appointments:
             appt_dict = asdict(appt)
@@ -216,7 +211,7 @@ def ask(prompt: str) -> str:
     return result
 
 
-def run_booking_flow(technicians: List[Technician]) -> None:
+def run_booking_flow(technicians: List[Technician], appointments: List[Appointment]) -> None:
     say("Let's book your appointment. I'll ask you a few quick questions.")
 
     # Service/trade
@@ -317,7 +312,6 @@ def run_faq_flow(technicians: List[Technician]) -> None:
 
 
 def main() -> None:
-    global appointments
     raw = load_data()
     technicians = build_technicians(raw)
     appointments = load_appointments()
@@ -335,7 +329,7 @@ def main() -> None:
             save_appointments(appointments)
             break
         elif choice == "book":
-            run_booking_flow(technicians)
+            run_booking_flow(technicians, appointments)
             continue
         elif choice == "faq":
             run_faq_flow(technicians)
