@@ -12,6 +12,8 @@ from intent import Intent, detect_intent
 DATA_FILE_PATH = Path(__file__).resolve().parent / "data.json"
 APPOINTMENTS_FILE_PATH = Path(__file__).resolve().parent / "appointments.json"
 console = Console()
+AGENT_TAG = "[bold green]Agent[/bold green]"
+USER_TAG = "[bold blue]You[/bold blue]"
 
 
 @dataclass(frozen=True)
@@ -152,7 +154,7 @@ def book_first_available(
     return None
 
 
-def derive_locations_and_hours(technicians: List[Technician]) -> Dict[str, str]:
+def derive_locations(technicians: List[Technician]) -> Set[str]:
     """
     Derive coverage hours per zone from technician zones.
 
@@ -160,18 +162,11 @@ def derive_locations_and_hours(technicians: List[Technician]) -> Dict[str, str]:
       - If 2+ technicians cover a zone: Mon–Sat 08:00–18:00
       - Otherwise: Mon–Fri 09:00–17:00
     """
-    zone_counts: Dict[str, int] = {}
+    set_of_zones = set()
     for tech in technicians:
-        for z in tech.zones:
-            zone_counts[z] = zone_counts.get(z, 0) + 1
+        set_of_zones.update(tech.zones)
 
-    hours_by_zone: Dict[str, str] = {}
-    for zone, count in sorted(zone_counts.items(), key=lambda kv: kv[0]):
-        if count >= 2:
-            hours_by_zone[zone] = "Mon–Sat 08:00–18:00"
-        else:
-            hours_by_zone[zone] = "Mon–Fri 09:00–17:00"
-    return hours_by_zone
+    return set_of_zones
 
 
 def derive_services_offered(technicians: List[Technician]) -> List[str]:
@@ -182,32 +177,38 @@ def derive_services_offered(technicians: List[Technician]) -> List[str]:
     return sorted(services)
 
 
+def say(prompt: str) -> str:
+    """Say something to the user."""
+    console.print(f"{AGENT_TAG}: {prompt}\n")
+
 def ask(prompt: str) -> str:
-    """Prompt the user and return the stripped input."""
-    return input(prompt).strip()
+    """Prompt the user with a chatbot style and return the stripped input."""
+    console.print(f"{AGENT_TAG}: {prompt}\n")
+    result = console.input(f"{USER_TAG}: ").strip()
+    print()
+    return result
 
 
 def run_booking_flow(technicians: List[Technician]) -> None:
-    console.print("[bold green]Agent[/bold green]")
-    print("\nLet's book your appointment. You'll be asked a few quick questions.")
+    say("Let's book your appointment. I'll ask you a few quick questions.")
 
     # Service/trade
     trade: Optional[str] = None
     while trade is None:
-        trade_input = ask("Service needed (e.g., plumber, electrician, hvac): ")
+        trade_input = ask("What service do you need? (e.g., plumber, electrician, hvac): ")
         normalized = normalize_trade(trade_input)
         if normalized is None:
-            print("Sorry, I didn't catch that trade. Try 'plumber', 'electrician', or 'hvac'.")
+            say("Sorry, I didn't catch that trade. Try 'plumber', 'electrician', or 'hvac'.")
             continue
         trade = normalized
 
     # Date & time
     service_time: Optional[datetime] = None
     while service_time is None:
-        dt_input = ask("Preferred date & time (YYYY-MM-DD HH:MM, 24h): ")
+        dt_input = ask("What is your preferred date & time for the appointment? (YYYY-MM-DD HH:MM, 24h): ")
         parsed = parse_datetime(dt_input)
         if parsed is None:
-            print("Please use format YYYY-MM-DD HH:MM, for example 2025-10-21 14:30.")
+            say("Please use format YYYY-MM-DD HH:MM, for example 2025-10-21 14:30.")
             continue
         service_time = parsed
 
@@ -217,7 +218,7 @@ def run_booking_flow(technicians: List[Technician]) -> None:
         zip_input = ask("Service zip code (5 digits): ")
         digits_only = "".join(ch for ch in zip_input if ch.isdigit())
         if len(digits_only) != 5:
-            print("Please enter a valid 5-digit zip code.")
+            say("Please enter a valid 5-digit zip code.")
             continue
         zip_code = digits_only
 
@@ -231,7 +232,7 @@ def run_booking_flow(technicians: List[Technician]) -> None:
     )
 
     if booking is None:
-        print(
+        say(
             "\nThanks! I checked our schedule and service area, but there is no availability matching "
             f"{trade} in {zip_code} at {service_time.strftime('%Y-%m-%d %H:%M')}. "
             "Please try a different time or service zip."
@@ -241,8 +242,8 @@ def run_booking_flow(technicians: List[Technician]) -> None:
     tech, confirmation_id = booking
     save_appointments(appointments)
 
+    say("You're all set!")
     print(
-        "\nYou're all set!\n"
         f"- Confirmation: {confirmation_id}\n"
         f"- Technician: {tech.name}\n"
         f"- Service: {trade}\n"
@@ -252,28 +253,30 @@ def run_booking_flow(technicians: List[Technician]) -> None:
 
 
 def run_faq_flow(technicians: List[Technician]) -> None:
-    print("\nAsk your question (e.g., 'What locations do you serve?', 'What services do you offer?').")
-    q = ask("> ")
+    q = ask("What question do you have today? (e.g., 'What locations do you serve?', 'What services do you offer?')")
     inferred_intent = detect_intent(q)
 
     def faq_location_handler():
-        hours_by_zone = derive_locations_and_hours(technicians)
-        if not hours_by_zone:
-            print("We are not currently serving any locations.")
+        locations = derive_locations(technicians)
+        if not locations:
+            say("We are not currently serving any locations.")
             return
 
-        print("\nWe currently serve these zip codes with the following hours:")
-        for zone, hours in hours_by_zone.items():
-            print(f"- {zone}: {hours}")
+        say("We currently serve these zip codes:")
+        for location in locations:
+            print(f"- {location}")
+        print()
 
     def faq_services_handler():
         services = derive_services_offered(technicians)
         if not services:
-            print("We don't have any services listed at the moment.")
+            say("We don't have any services listed at the moment.")
             return
-        print("\nWe offer the following services:")
+
+        say("We offer the following services:")
         for s in services:
             print(f"- {s}")
+        print()
     
     intent_handlers = {
         Intent.FAQ_LOCATIONS: faq_location_handler,
@@ -282,7 +285,7 @@ def run_faq_flow(technicians: List[Technician]) -> None:
 
     handler = intent_handlers.get(inferred_intent)
     if handler is None:
-        print("\nSorry, I can help with locations/hours or services offered. Try asking one of those.")
+        say("\nSorry, I can help with locations/hours or services offered. Try asking one of those.")
         return
 
     handler()
@@ -292,15 +295,16 @@ def main() -> None:
     raw = load_data()
     technicians = build_technicians(raw)
 
-    print("Welcome to the Service Assistant CLI chatbot!")
+    say(f"{AGENT_TAG}: Welcome to the Service Assistant CLI chatbot!")
     print("- Type 'book' to book an appointment")
     print("- Type 'faq' to ask about locations/hours or services offered")
     print("- Type 'quit' to exit")
+    print()
 
     while True:
-        choice = ask("\n> ").lower()
+        choice = ask("What would you like to do today? (book/faq/quit):").lower()
         if choice in ("quit", "exit", "q"):
-            print("Goodbye!")
+            say("Goodbye!")
             break
         elif choice == "book":
             run_booking_flow(technicians)
@@ -308,7 +312,7 @@ def main() -> None:
         elif choice == "faq":
             run_faq_flow(technicians)
         else:
-            print("Please choose 'book', 'faq', or 'quit'.")
+            say("Please choose 'book', 'faq', or 'quit'.")
 
 
 if __name__ == "__main__":
