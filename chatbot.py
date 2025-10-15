@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from rich.console import Console
+import uuid
 
 from intent import Intent, detect_intent
 
-DATA_FILE_PATH = Path(__file__).resolve().parent / "data.json"
-APPOINTMENTS_FILE_PATH = Path(__file__).resolve().parent / "appointments.json"
+DATA_FILE_PATH = Path(".") / "data.json"
+APPOINTMENTS_FILE_PATH = Path(".") / "appointments.jsonl"
 console = Console()
 AGENT_TAG = "[bold green]Agent[/bold green]"
 USER_TAG = "[bold blue]You[/bold blue]"
+appointments = []
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,15 @@ class Technician:
     name: str
     zones: Set[str]
     business_units: Set[str]
+
+
+@dataclass(frozen=True)
+class Appointment:
+    appointment_id: uuid.UUID
+    technician_id: int
+    start: datetime
+    end: datetime
+    trade: str
 
 
 def load_data(data_file_path: Path = DATA_FILE_PATH) -> Dict:
@@ -93,40 +104,57 @@ def parse_datetime(user_input: str) -> Optional[datetime]:
 
 def load_appointments(appointments_file_path: Path = APPOINTMENTS_FILE_PATH) -> Dict[str, Dict[str, str]]:
     """
-    Load appointments file as a mapping of technician_id -> { iso_datetime: appointment_id }.
+    Load appointments file as a mapping of technician_id -> [].
     The file is created on demand if it does not exist.
     """
     if not appointments_file_path.exists():
-        return {}
+        return []
     try:
         with appointments_file_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-            # Ensure expected structure
-            return {str(k): dict(v) for k, v in data.items()}
+            appointments = []
+            for line in f:
+                data = json.loads(line)
+                appointments.append(Appointment(
+                    appointment_id=UUID(data["appointment_id"]),
+                    technician_id=data["technician_id"],
+                    start=datetime.fromisoformat(data["start"]),
+                    end=datetime.fromisoformat(data["end"]),
+                    trade=data["trade"]
+                ))
+            return appointments
     except Exception:
         # If unreadable/corrupt, start fresh in-memory
-        return {}
+        return []
 
 
-def save_appointments(appointments: Dict[str, Dict[str, str]], appointments_file_path: Path = APPOINTMENTS_FILE_PATH) -> None:
+def save_appointments(appointments: List[Appointment], appointments_file_path: Path = APPOINTMENTS_FILE_PATH) -> None:
     """Persist appointments mapping to disk."""
+    print('saving', appointments)
     with appointments_file_path.open("w", encoding="utf-8") as f:
-        json.dump(appointments, f, indent=2, ensure_ascii=False)
+        for appt in appointments:
+            appt_dict = asdict(appt)
+            appt_dict['appointment_id'] = str(appt.appointment_id)
+            appt_dict['start'] = appt.start.isoformat()
+            appt_dict['end'] = appt.end.isoformat()
+            f.write(json.dumps(appt_dict) + "\n")
 
 
 def find_matching_technicians(trade: str, zip_code: str, technicians: List[Technician]) -> List[Technician]:
     """Filter technicians by business unit (trade) and coverage zone (zip)."""
-    return [t for t in technicians if trade in t.business_units and zip_code in t.zones]
+    return [t
+            for t in technicians
+            if trade in t.business_units and zip_code in t.zones]
 
 
-def is_technician_available(technician: Technician, service_time: datetime, appointments: Dict[str, Dict[str, str]]) -> bool:
-    """
-    Availability model: a technician is considered busy if an appointment exists at the exact requested start time.
-    Otherwise available.
-    """
-    tech_key = str(technician.technician_id)
-    time_key = service_time.strftime("%Y-%m-%d %H:%M")
-    return time_key not in appointments.get(tech_key, {})
+def is_technician_available(technician: Technician, start: datetime, end: datetime, appointments: List[Appointment]) -> bool:
+    for appt in appointments:
+        if appt.technician_id != technician.technician_id:
+            continue
+
+        if not (end <= appt.start or appt.end <= start):
+            return False
+
+    return True
 
 
 def book_first_available(
@@ -134,7 +162,7 @@ def book_first_available(
     zip_code: str,
     service_time: datetime,
     technicians: List[Technician],
-    appointments: Dict[str, Dict[str, str]],
+    appointments: List[Appointment],
 ) -> Optional[Tuple[Technician, str]]:
     """
     Book the first available technician matching trade and zone. Returns (technician, confirmation_id) if booked.
@@ -143,30 +171,29 @@ def book_first_available(
     if not matches:
         return None
 
-    time_key = service_time.strftime("%Y-%m-%d %H:%M")
     for tech in matches:
-        if is_technician_available(tech, service_time, appointments):
-            tech_key = str(tech.technician_id)
-            appointments.setdefault(tech_key, {})
-            confirmation_id = f"A-{tech.technician_id}-{time_key.replace(' ', 'T').replace(':', '')}"
-            appointments[tech_key][time_key] = confirmation_id
+        start = service_time
+        end = service_time + timedelta(hours=1)
+
+        if is_technician_available(tech, start, end, appointments):
+            confirmation_id = uuid.uuid4()
+            appointments.append(Appointment(
+                appointment_id=confirmation_id,
+                technician_id=tech.technician_id,
+                start=start,
+                end=end,
+                trade=trade,
+            ))
             return tech, confirmation_id
+
     return None
 
 
-def derive_locations(technicians: List[Technician]) -> Set[str]:
-    """
-    Derive coverage hours per zone from technician zones.
-
-    Assumption: Zones (zip codes) covered by multiple technicians have extended hours due to greater coverage.
-      - If 2+ technicians cover a zone: Mon–Sat 08:00–18:00
-      - Otherwise: Mon–Fri 09:00–17:00
-    """
+def derive_locations(technicians: List[Technician]) -> List[str]:
     set_of_zones = set()
     for tech in technicians:
-        set_of_zones.update(tech.zones)
-
-    return set_of_zones
+        set_of_zones |= tech.zones
+    return sorted(set_of_zones)
 
 
 def derive_services_offered(technicians: List[Technician]) -> List[str]:
@@ -205,7 +232,7 @@ def run_booking_flow(technicians: List[Technician]) -> None:
     # Date & time
     service_time: Optional[datetime] = None
     while service_time is None:
-        dt_input = ask("What is your preferred date & time for the appointment? (YYYY-MM-DD HH:MM, 24h): ")
+        dt_input = ask("What is your preferred date & time for the appointment (1h)? (YYYY-MM-DD HH:MM, 24h): ")
         parsed = parse_datetime(dt_input)
         if parsed is None:
             say("Please use format YYYY-MM-DD HH:MM, for example 2025-10-21 14:30.")
@@ -222,7 +249,6 @@ def run_booking_flow(technicians: List[Technician]) -> None:
             continue
         zip_code = digits_only
 
-    appointments = load_appointments()
     booking = book_first_available(
         trade=trade,
         zip_code=zip_code,
@@ -240,7 +266,6 @@ def run_booking_flow(technicians: List[Technician]) -> None:
         return
 
     tech, confirmation_id = booking
-    save_appointments(appointments)
 
     say("You're all set!")
     print(
@@ -292,10 +317,12 @@ def run_faq_flow(technicians: List[Technician]) -> None:
 
 
 def main() -> None:
+    global appointments
     raw = load_data()
     technicians = build_technicians(raw)
+    appointments = load_appointments()
 
-    say(f"{AGENT_TAG}: Welcome to the Service Assistant CLI chatbot!")
+    say(f"Welcome to the Service Assistant CLI chatbot!")
     print("- Type 'book' to book an appointment")
     print("- Type 'faq' to ask about locations/hours or services offered")
     print("- Type 'quit' to exit")
@@ -305,6 +332,7 @@ def main() -> None:
         choice = ask("What would you like to do today? (book/faq/quit):").lower()
         if choice in ("quit", "exit", "q"):
             say("Goodbye!")
+            save_appointments(appointments)
             break
         elif choice == "book":
             run_booking_flow(technicians)
