@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from rich.console import Console
 import uuid
+from zoneinfo import ZoneInfo
+import ziptimezone as zpt
+
 
 from intent import Intent, detect_intent
 
@@ -137,6 +140,38 @@ def parse_datetime(user_input: str) -> Optional[datetime]:
         except ValueError:
             continue
     return None
+
+
+def get_local_work_hours(zip_code: str) -> tuple[datetime, datetime]:
+    # Map ZIP's timezone region → IANA name
+    region_to_iana = {
+        "Eastern": "America/New_York",
+        "Central": "America/Chicago",
+        "Mountain": "America/Denver",
+        "Pacific": "America/Los_Angeles",
+        "Alaska": "America/Anchorage",
+        "Hawaii": "Pacific/Honolulu"
+    }
+
+    region = zpt.get_timezone_by_zip(zip_code)
+    if region not in region_to_iana:
+        raise ValueError(f"No IANA timezone mapping for region '{region}'")
+
+    zip_tz = ZoneInfo(region_to_iana[region])
+    print(zip_tz)
+    local_tz = datetime.now().astimezone().tzinfo
+
+    today = datetime.now().date()
+
+    # 9am and 5pm in the ZIP's local timezone
+    zip_start = datetime.combine(today, time(9, 0), tzinfo=zip_tz)
+    zip_end = datetime.combine(today, time(17, 0), tzinfo=zip_tz)
+
+    # Convert to local timezone
+    local_start = zip_start.astimezone(local_tz)
+    local_end = zip_end.astimezone(local_tz)
+
+    return local_start, local_end
 
 
 def load_appointments(appointments_file_path: Path = APPOINTMENTS_FILE_PATH) -> Dict[str, Dict[str, str]]:
@@ -329,7 +364,9 @@ def run_faq_flow(technicians: List[Technician]) -> None:
             return
 
         say("We currently serve these zip codes:")
+        #start, end = get_local_work_hours("02138")
         for location in locations:
+            #print(f"- {location} ({start} -- {end})")
             print(f"- {location}")
         print()
 
