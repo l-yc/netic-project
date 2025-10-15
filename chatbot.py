@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 from __future__ import annotations
 
 import json
@@ -7,10 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+from rich.console import Console
 
+from intent import Intent, detect_intent
 
 DATA_FILE_PATH = Path(__file__).resolve().parent / "data.json"
 APPOINTMENTS_FILE_PATH = Path(__file__).resolve().parent / "appointments.json"
+console = Console()
 
 
 @dataclass(frozen=True)
@@ -33,9 +34,9 @@ def build_technicians(raw_data: Dict) -> List[Technician]:
     for t in raw_data.get("Technician_Profiles", []):
         technicians.append(
             Technician(
-                technician_id=int(t["id"]),
-                name=str(t["name"]),
-                zones=set(map(str, t.get("zones", []))),
+                technician_id=t["id"],
+                name=t["name"],
+                zones=set(t.get("zones", [])),
                 business_units=set(map(str.lower, t.get("business_units", []))),
             )
         )
@@ -187,6 +188,7 @@ def ask(prompt: str) -> str:
 
 
 def run_booking_flow(technicians: List[Technician]) -> None:
+    console.print("[bold green]Agent[/bold green]")
     print("\nLet's book your appointment. You'll be asked a few quick questions.")
 
     # Service/trade
@@ -252,19 +254,19 @@ def run_booking_flow(technicians: List[Technician]) -> None:
 def run_faq_flow(technicians: List[Technician]) -> None:
     print("\nAsk your question (e.g., 'What locations do you serve?', 'What services do you offer?').")
     q = ask("> ")
-    text = q.lower()
+    inferred_intent = detect_intent(q)
 
-    if any(k in text for k in ["location", "locations", "serve", "service area", "zip", "hours", "open"]):
+    def faq_location_handler():
         hours_by_zone = derive_locations_and_hours(technicians)
         if not hours_by_zone:
             print("We are not currently serving any locations.")
             return
+
         print("\nWe currently serve these zip codes with the following hours:")
         for zone, hours in hours_by_zone.items():
             print(f"- {zone}: {hours}")
-        return
 
-    if any(k in text for k in ["service", "services", "offer", "do you handle", "what do you do"]):
+    def faq_services_handler():
         services = derive_services_offered(technicians)
         if not services:
             print("We don't have any services listed at the moment.")
@@ -272,9 +274,18 @@ def run_faq_flow(technicians: List[Technician]) -> None:
         print("\nWe offer the following services:")
         for s in services:
             print(f"- {s}")
+    
+    intent_handlers = {
+        Intent.FAQ_LOCATIONS: faq_location_handler,
+        Intent.FAQ_SERVICES: faq_services_handler,
+    }
+
+    handler = intent_handlers.get(inferred_intent)
+    if handler is None:
+        print("\nSorry, I can help with locations/hours or services offered. Try asking one of those.")
         return
 
-    print("\nSorry, I can help with locations/hours or services offered. Try asking one of those.")
+    handler()
 
 
 def main() -> None:
@@ -287,17 +298,17 @@ def main() -> None:
     print("- Type 'quit' to exit")
 
     while True:
-        choice = ask("\nWhat would you like to do? (book/faq/quit): ").lower()
+        choice = ask("\n> ").lower()
         if choice in ("quit", "exit", "q"):
             print("Goodbye!")
             break
-        if choice == "book":
+        elif choice == "book":
             run_booking_flow(technicians)
             continue
-        if choice == "faq":
+        elif choice == "faq":
             run_faq_flow(technicians)
-            continue
-        print("Please choose 'book', 'faq', or 'quit'.")
+        else:
+            print("Please choose 'book', 'faq', or 'quit'.")
 
 
 if __name__ == "__main__":
