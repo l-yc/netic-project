@@ -18,6 +18,20 @@ USER_TAG = "[bold blue]You[/bold blue]"
 
 
 @dataclass(frozen=True)
+class Location:
+    location_id: int
+    name: str
+    address: str
+
+
+@dataclass(frozen=True)
+class Customer:
+    customer_id: int
+    name: str
+    contact: str
+
+
+@dataclass(frozen=True)
 class Technician:
     technician_id: int
     name: str
@@ -38,6 +52,30 @@ def load_data(data_file_path: Path = DATA_FILE_PATH) -> Dict:
     """Load the JSON data file into a dictionary."""
     with data_file_path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def build_locations(raw_data: Dict) -> Dict[str, Location]:
+    """Convert raw location profiles into Location objects."""
+    locations = {}
+    for t in raw_data.get("Location_Profiles", []):
+        locations[t["id"]] = Location(
+                    location_id=t["id"],
+                    name=t["name"],
+                    address=t.get("address")
+                )
+    return locations
+
+
+def build_customers(raw_data: Dict) -> Dict[str, Customer]:
+    """Convert raw customer profiles into Customer objects."""
+    customers = {}
+    for t in raw_data.get("Customer_Profiles", []):
+        customers[t["id"]] = Customer(
+                    customer_id=t["id"],
+                    name=t["name"],
+                    contact=t.get("contact")
+                )
+    return customers
 
 
 def build_technicians(raw_data: Dict) -> List[Technician]:
@@ -211,7 +249,10 @@ def ask(prompt: str) -> str:
     return result
 
 
-def run_booking_flow(technicians: List[Technician], appointments: List[Appointment]) -> None:
+def run_booking_flow(locations: List[Location], 
+                     customers: List[Customer], 
+                     technicians: List[Technician],
+                     appointments: List[Appointment]) -> None:
     say("Let's book your appointment. I'll ask you a few quick questions.")
 
     # Service/trade
@@ -227,7 +268,7 @@ def run_booking_flow(technicians: List[Technician], appointments: List[Appointme
     # Date & time
     service_time: Optional[datetime] = None
     while service_time is None:
-        dt_input = ask("What is your preferred date & time for the appointment (1h)? (YYYY-MM-DD HH:MM, 24h): ")
+        dt_input = ask("What is the preferred date & time for the appointment (1h)? (YYYY-MM-DD HH:MM, 24h): ")
         parsed = parse_datetime(dt_input)
         if parsed is None:
             say("Please use format YYYY-MM-DD HH:MM, for example 2025-10-21 14:30.")
@@ -237,7 +278,7 @@ def run_booking_flow(technicians: List[Technician], appointments: List[Appointme
     # Zip code
     zip_code: Optional[str] = None
     while zip_code is None:
-        zip_input = ask("Service zip code (5 digits): ")
+        zip_input = ask("What is the customer zip code? (5 digits): ")
         digits_only = "".join(ch for ch in zip_input if ch.isdigit())
         if len(digits_only) != 5:
             say("Please enter a valid 5-digit zip code.")
@@ -262,6 +303,9 @@ def run_booking_flow(technicians: List[Technician], appointments: List[Appointme
 
     tech, confirmation_id = booking
 
+    #location_profile = locations[zip_code]
+    #customer_profile = customers[zip_code]
+
     say("You're all set!")
     print(
         f"- Confirmation: {confirmation_id}\n"
@@ -269,6 +313,8 @@ def run_booking_flow(technicians: List[Technician], appointments: List[Appointme
         f"- Service: {trade}\n"
         f"- When: {service_time.strftime('%Y-%m-%d %H:%M')}\n"
         f"- Where (zip): {zip_code}\n"
+        #f"- Where (zip): {location_profile.name} -> {location_profile.address}\n"
+        #f"- Customer: {customer_profile.name} ({customer_profile.contact})\n"
     )
 
 
@@ -313,6 +359,8 @@ def run_faq_flow(technicians: List[Technician]) -> None:
 
 def main() -> None:
     raw = load_data()
+    locations = build_locations(raw)
+    customers = build_customers(raw)
     technicians = build_technicians(raw)
     appointments = load_appointments()
 
@@ -329,7 +377,7 @@ def main() -> None:
             save_appointments(appointments)
             break
         elif choice == "book":
-            run_booking_flow(technicians, appointments)
+            run_booking_flow(locations, customers, technicians, appointments)
             continue
         elif choice == "faq":
             run_faq_flow(technicians)

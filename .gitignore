@@ -1,0 +1,4 @@
+.venv/
+appointments.jsonl
+__pycache__
+
