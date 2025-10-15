@@ -5,6 +5,10 @@ A simple Python CLI chatbot that books appointments and answers FAQs using `data
 ### Requirements
 - Python 3.9+
 
+```
+pip install -r requirements.txt
+```
+
 ### Data
 - The bot reads technicians, customers, and locations from `data.json`.
 - Bookings are persisted to `appointments.json` in the project root.
